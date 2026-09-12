@@ -6,6 +6,10 @@ const HOOKFORGE_URL = 'https://hook-forge-prime.base44.app/';
 (async () => {
   console.log('🧠 Connecting to Gemini 3.6 Flash...');
 
+  // =========================================================
+  // 1. CHECK SECRETS
+  // =========================================================
+
   if (!process.env.GEMINI_API_KEY) {
     console.error('❌ GEMINI_API_KEY is missing.');
     process.exit(1);
@@ -16,38 +20,42 @@ const HOOKFORGE_URL = 'https://hook-forge-prime.base44.app/';
     process.exit(1);
   }
 
+  // =========================================================
+  // 2. INITIALIZE GEMINI
+  // =========================================================
+
   const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY
   });
 
   // =========================================================
-  // 1. GENERATE ENGLISH MARKETING ARTICLE
+  // 3. GENERATE ENGLISH ARTICLE
   // =========================================================
 
   const prompt = `
 You are an expert content marketing strategist specializing in YouTube
 growth, creator psychology, and AI tools.
 
-Write a completely original, highly engaging MARKETING ARTICLE IN ENGLISH
+Write a completely original, high-quality MARKETING ARTICLE IN ENGLISH
 for YouTubers, NewTubers, micro-creators, and small content creators.
 
-IMPORTANT:
-- The entire article MUST be written in natural English.
+LANGUAGE REQUIREMENTS:
+- Write the entire article in natural English.
 - Do NOT write Arabic.
 - Do NOT mix languages.
-- Do NOT fabricate statistics.
-- Do NOT promise guaranteed views, CTR, subscribers, or success.
-- Provide genuine useful information before promoting the product.
-- Make the article feel like a professional creator-industry article,
-  not an advertisement.
+- Do NOT translate the article into Arabic.
 
-CORE PROBLEM:
+TOPIC:
 
-A creator can spend hours or days producing a video, but the video can
-underperform because the title does not create enough curiosity or the
-opening hook fails to keep viewers watching.
+Why great YouTube videos can fail because of weak titles and weak opening
+hooks.
 
-Discuss concepts such as:
+Explain the real problem creators face when they spend hours or days
+creating a video but fail to attract or retain viewers because the title
+doesn't create enough curiosity or the opening fails to capture attention.
+
+Discuss useful concepts such as:
+
 - Logic Gaps
 - Open Loops
 - Curiosity
@@ -56,41 +64,55 @@ Discuss concepts such as:
 - Strong YouTube Hooks
 - Clickable Titles
 
-Explain these concepts in a practical way that creators can actually use.
+Give practical examples and actionable advice.
 
-Then naturally introduce:
+IMPORTANT:
+- Do NOT fabricate statistics.
+- Do NOT claim guaranteed views.
+- Do NOT claim guaranteed CTR.
+- Do NOT claim guaranteed subscribers.
+- Do NOT promise guaranteed success.
+- Avoid exaggerated fear-based manipulation.
+- Provide genuine value before promoting the product.
 
-HookForge AI
+Then naturally introduce HookForge AI.
 
 Explain that HookForge AI helps creators generate:
-- High-retention YouTube hooks
-- Clickable YouTube titles
+
+- YouTube hooks
+- YouTube titles
 - Video scripts
 - Content ideas
 
-The product website is:
+Use this EXACT website URL:
 
 ${HOOKFORGE_URL}
 
-IMPORTANT LINK RULE:
-Use ONLY this HookForge URL.
-Do NOT use https://base44.app.
-Include the HookForge URL naturally at least twice in the article.
+IMPORTANT:
+- NEVER use https://base44.app
+- ONLY use ${HOOKFORGE_URL}
+- Include the HookForge URL naturally at least twice.
 
-The article should have:
-- A strong curiosity-driven title
-- A compelling introduction
-- Clear sections with Markdown headings
-- Practical examples
-- Useful advice
-- A natural HookForge AI section near the end
-- A concise conclusion and call to action
+ARTICLE STRUCTURE:
 
-Return ONLY valid JSON with exactly two keys:
+1. Strong curiosity-driven English title
+2. Engaging introduction
+3. Explanation of the problem
+4. Psychology behind hooks and titles
+5. Practical examples
+6. Actionable advice
+7. Natural HookForge AI introduction
+8. Conclusion
+9. Clear call to action
+
+The article should feel like a professional creator-industry article,
+not a spam advertisement.
+
+Return ONLY valid JSON with exactly these two keys:
 
 {
   "title": "English article title",
-  "content": "Full English article in Markdown"
+  "content": "Full article content in Markdown"
 }
 `;
 
@@ -108,24 +130,31 @@ Return ONLY valid JSON with exactly two keys:
 
     const responseText = response.text.trim();
 
-    const aiGeneratedData = JSON.parse(responseText);
+    // Remove accidental Markdown JSON wrapper if Gemini adds one
+    const cleanJson = responseText
+      .replace(/^```json\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
 
-    if (!aiGeneratedData.title || !aiGeneratedData.content) {
+    const generated = JSON.parse(cleanJson);
+
+    if (!generated.title || !generated.content) {
       throw new Error('Gemini returned incomplete JSON.');
     }
 
-    rawTitle = aiGeneratedData.title;
-    articleBody = aiGeneratedData.content;
+    rawTitle = generated.title;
+    articleBody = generated.content;
 
     console.log(`✨ Article generated: "${rawTitle}"`);
 
   } catch (error) {
-    console.error('❌ Gemini generation failed:', error);
+    console.error('❌ Gemini generation failed:');
+    console.error(error);
     process.exit(1);
   }
 
   // =========================================================
-  // 2. START PLAYWRIGHT
+  // 4. START PLAYWRIGHT
   // =========================================================
 
   console.log('🤖 Starting Playwright...');
@@ -139,7 +168,7 @@ Return ONLY valid JSON with exactly two keys:
   try {
 
     // =======================================================
-    // 3. LOAD AND NORMALIZE SUBSTACK COOKIES
+    // 5. LOAD SUBSTACK COOKIES
     // =======================================================
 
     let cookiesJson;
@@ -147,31 +176,43 @@ Return ONLY valid JSON with exactly two keys:
     try {
       cookiesJson = JSON.parse(process.env.SUBSTACK_COOKIES);
     } catch (error) {
-      throw new Error('SUBSTACK_COOKIES is not valid JSON.');
+      throw new Error(
+        'SUBSTACK_COOKIES is not valid JSON.'
+      );
     }
 
     if (!Array.isArray(cookiesJson)) {
-      throw new Error('SUBSTACK_COOKIES must contain a JSON array.');
+      throw new Error(
+        'SUBSTACK_COOKIES must be a JSON array.'
+      );
     }
 
-    // Fix incompatible cookie attributes
+    // Normalize cookie sameSite values
     const normalizedCookies = cookiesJson.map(cookie => {
 
       const normalized = {
         ...cookie
       };
 
-      // Playwright only accepts Strict, Lax, or None
       if (normalized.sameSite) {
-        const value = String(normalized.sameSite).toLowerCase();
 
-        if (value === 'strict') {
+        const sameSite = String(
+          normalized.sameSite
+        ).toLowerCase();
+
+        if (sameSite === 'strict') {
           normalized.sameSite = 'Strict';
-        } else if (value === 'lax') {
+        }
+
+        else if (sameSite === 'lax') {
           normalized.sameSite = 'Lax';
-        } else if (value === 'none') {
+        }
+
+        else if (sameSite === 'none') {
           normalized.sameSite = 'None';
-        } else {
+        }
+
+        else {
           delete normalized.sameSite;
         }
       }
@@ -179,24 +220,51 @@ Return ONLY valid JSON with exactly two keys:
       return normalized;
     });
 
-    console.log(`🍪 Loading ${normalizedCookies.length} Substack cookies...`);
+    console.log(
+      `🍪 Loading ${normalizedCookies.length} Substack cookies...`
+    );
 
     await context.addCookies(normalizedCookies);
 
     // =======================================================
-    // 4. OPEN SUBSTACK
+    // 6. OPEN SUBSTACK
     // =======================================================
 
     const page = await context.newPage();
 
     console.log('🌐 Opening Substack...');
 
+    // IMPORTANT:
+    // Do NOT use "networkidle".
+    // Substack can keep background requests running indefinitely.
     await page.goto('https://substack.com', {
-      waitUntil: 'networkidle'
+      waitUntil: 'domcontentloaded',
+      timeout: 60000
     });
 
+    console.log('✅ Substack HTML loaded.');
+
+    // Give the page time to initialize its JavaScript
+    await page.waitForTimeout(5000);
+
     // =======================================================
-    // 5. PUBLISH ARTICLE
+    // 7. FIND THE EDITOR
+    // =======================================================
+
+    console.log('🔎 Looking for Substack editor...');
+
+    await page.waitForSelector(
+      'div[placeholder="Type your title..."]',
+      {
+        state: 'visible',
+        timeout: 30000
+      }
+    );
+
+    console.log('✅ Substack editor detected.');
+
+    // =======================================================
+    // 8. ENTER TITLE
     // =======================================================
 
     console.log('📝 Entering article title...');
@@ -206,34 +274,67 @@ Return ONLY valid JSON with exactly two keys:
       rawTitle
     );
 
+    // =======================================================
+    // 9. ENTER ARTICLE
+    // =======================================================
+
     console.log('✍️ Entering article body...');
 
-    await page.focus('div[aria-label="Post body"]');
+    await page.focus(
+      'div[aria-label="Post body"]'
+    );
 
     await page.keyboard.type(articleBody);
 
-    console.log('📤 Continuing to publication settings...');
+    // =======================================================
+    // 10. CONTINUE
+    // =======================================================
 
-    await page.click('button:has-text("Continue")');
+    console.log('📤 Clicking Continue...');
+
+    await page.click(
+      'button:has-text("Continue")',
+      {
+        timeout: 30000
+      }
+    );
 
     await page.waitForTimeout(3000);
+
+    // =======================================================
+    // 11. FINAL PUBLISH
+    // =======================================================
 
     console.log('🚀 Publishing article...');
 
     await page.click(
-      'button:has-text("Send to everyone now")'
+      'button:has-text("Send to everyone now")',
+      {
+        timeout: 30000
+      }
     );
 
-    console.log('======================================');
+    await page.waitForTimeout(5000);
+
+    // =======================================================
+    // 12. SUCCESS
+    // =======================================================
+
+    console.log('');
+    console.log('==========================================');
     console.log('🎉 ARTICLE PUBLISHED SUCCESSFULLY');
-    console.log('======================================');
-    console.log(`Title: ${rawTitle}`);
-    console.log(`HookForge: ${HOOKFORGE_URL}`);
+    console.log('==========================================');
+    console.log(`📰 Title: ${rawTitle}`);
+    console.log(`🔗 HookForge: ${HOOKFORGE_URL}`);
+    console.log('==========================================');
 
   } catch (error) {
 
-    console.error('❌ Substack automation failed:');
+    console.error('');
+    console.error('❌ SUBSTACK AUTOMATION FAILED');
+    console.error('------------------------------------------');
     console.error(error);
+    console.error('------------------------------------------');
 
     process.exitCode = 1;
 
