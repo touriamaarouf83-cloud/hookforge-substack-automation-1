@@ -21,12 +21,11 @@ jobs:
         run: |
           npm install
           npx playwright install --with-deps chromium
-
+          
       - name: Generate and Publish
         env:
-          SUBSTACK_COOKIES: ${{ secrets.SUBSTACK_COOKIES }}
+          SUBSTACK_SID: ${{ secrets.SUBSTACK_SID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SUBSTACK_EMAIL: ${{ secrets.SUBSTACK_EMAIL }}
         run: node publish-bot.js
 
       # 📸 رفع لقطة الشاشة تلقائياً إذا فشل الروبوت
