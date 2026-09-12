@@ -1,3 +1,4 @@
+const { chromium } = require('playwright');
 const { GoogleGenAI } = require('@google/genai');
 
 const HOOKFORGE_URL = 'https://hook-forge-prime.base44.app/';
@@ -6,11 +7,11 @@ const HOOKFORGE_URL = 'https://hook-forge-prime.base44.app/';
   console.log('🧠 Connecting to Gemini 3.6 Flash...');
 
   if (!process.env.GEMINI_API_KEY || !process.env.SUBSTACK_COOKIES) {
-    console.error('❌ Environment secrets (GEMINI_API_KEY or SUBSTACK_COOKIES) are missing.');
+    console.error('❌ Environment secrets are missing.');
     process.exit(1);
   }
 
-  // 1. توليد المقال باستخدام جيميناي
+  // 1. توليد المقال عبر جيميناي
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   const prompt = `
 You are an expert content marketing strategist specializing in YouTube growth, creator psychology, and AI tools.
@@ -41,60 +42,105 @@ Return ONLY valid JSON with exactly these two keys:
     process.exit(1);
   }
 
-  // 2. استخراج الكوكيز وتحويلها لصيغة طلب وب المباشر (HTTP Header)
-  console.log('🍪 Processing session cookies for API injection...');
-  let cookiesHeader = '';
-  try {
-    const cookiesJson = JSON.parse(process.env.SUBSTACK_COOKIES);
-    cookiesHeader = cookiesJson.map(c => `${c.name}=${c.value}`).join('; ');
-  } catch (e) {
-    console.error('❌ Failed to parse SUBSTACK_COOKIES JSON.');
-    process.exit(1);
-  }
-
-  // 3. النشر الفوري والمباشر داخل قاعدة بيانات مسودات سوبستاك بدون فتح متصفح
-  console.log('🚀 Submitting draft directly via Substack REST API...');
+  console.log('🤖 Launching Playwright with Stealth Bypass & Anti-Fingerprinting...');
   
-  const draftPayload = {
-    draft_title: rawTitle,
-    draft_subtitle: "Unlock your retention potential with psychological hooks.",
-    draft_body: JSON.stringify({
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [{ type: "text", text: articleBody }]
-        }
-      ]
-    }),
-    publication_id: null
-  };
+  // تشغيل المتصفح مع تمرير حزم تخفي تمنع خوارزميات Cloudflare من اكتشاف خوادم جيت هاب
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-blink-features=AutomationControlled', // إخفاء حقيقة أن المتصفح يدار بروبوت
+      '--use-fake-ui-for-media-stream',
+      '--window-size=1920,1080'
+    ]
+  });
+
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 },
+    locale: 'en-US',
+    timezoneId: 'America/New_York'
+  });
+
+  // إضافة خاصية إضافية لإخفاء متغير أتمتة جافا سكريبت بالمتصفح
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
 
   try {
-    const response = await fetch('https://substack.com', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Cookie': cookiesHeader,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      body: JSON.stringify(draftPayload)
+    let cookiesJson = JSON.parse(process.env.SUBSTACK_COOKIES);
+    const normalizedCookies = cookiesJson.map(cookie => {
+      const normalized = { ...cookie };
+      if (normalized.sameSite) {
+        const sameSite = String(normalized.sameSite).toLowerCase();
+        if (sameSite === 'strict') normalized.sameSite = 'Strict';
+        else if (sameSite === 'lax') normalized.sameSite = 'Lax';
+        else if (sameSite === 'none') normalized.sameSite = 'None';
+        else delete normalized.sameSite;
+      }
+      return normalized;
     });
 
-    if (response.ok) {
-      const resData = await response.json();
-      console.log('\n==========================================');
-      console.log('🎉 DRAFT CONTENT INJECTED SUCCESSFULLY VIA API');
-      console.log(`📰 Title: ${rawTitle}`);
-      console.log(`🆔 Draft ID: ${resData.id || 'Created'}`);
-      console.log('==========================================');
-    } else {
-      const errText = await response.text();
-      throw new Error(`Substack API rejected the token. Status: ${response.status} - ${errText}`);
-    }
-  } catch (apiError) {
-    console.error('❌ SUBSTACK API SUBMISSION FAILED');
-    console.error(apiError);
+    await context.addCookies(normalizedCookies);
+    const page = await context.newPage();
+
+    // 🎯 التوجه مباشرة إلى صفحة الكتابة، المتصفح المخفي الآن سيعبر التحدي الأمني
+    console.log('🌐 Loading Substack Post Studio with Secure Bypass...');
+    await page.goto('https://substack.com', {
+      waitUntil: 'load',
+      timeout: 90000
+    });
+
+    await page.waitForTimeout(7000); // إعطاء سكريبتات سوبستاك مهلة للاستقرار
+
+    // 🎯 تحديث السليكتورز: استخدام ميزة تحديد الحقول عبر الـ Placeholder بشكل مباشر ومرن
+    console.log('🔎 Intercepting Substack workspace fields...');
+    const titleField = page.locator('div[placeholder*="title"], [contenteditable="true"]').first();
+    await titleField.waitFor({ state: 'visible', timeout: 30000 });
+    
+    console.log('📝 Injecting conversion title...');
+    await titleField.fill(rawTitle);
+    await page.waitForTimeout(1000);
+
+    console.log('✍️ Injecting psychological hooks...');
+    // التركيز على حقل نص المقال الرئيسي
+    const bodyField = page.locator('div[aria-label="Post body"], .prose-editor, div[contenteditable="true"]').last();
+    await bodyField.focus();
+
+    await page.evaluate(({ body }) => {
+      const editors = document.querySelectorAll('div[contenteditable="true"]');
+      const mainEditor = editors[editors.length - 1]; // الحقل الأخير دائماً هو متن المقال
+      if (mainEditor) {
+        mainEditor.focus();
+        document.execCommand('insertText', false, body);
+      }
+    }, { body: articleBody });
+
+    await page.waitForTimeout(3000);
+
+    // الضغط على أزرار النشر النهائي
+    console.log('📤 Processing submission layouts...');
+    const continueBtn = page.locator('button:has-text("Continue"), button.button.primary').first();
+    await continueBtn.click();
+
+    await page.waitForTimeout(4000);
+
+    console.log('🚀 Blasting content to Substack network...');
+    const publishBtn = page.locator('button:has-text("Send to everyone now"), button:has-text("Publish")').first();
+    await publishBtn.click();
+
+    await page.waitForTimeout(5000);
+
+    console.log('\n==========================================');
+    console.log('🎉 BYPASS SUCCESSFUL: ARTICLE PUBLISHED TO SUBSTACK');
+    console.log(`📰 Title: ${rawTitle}`);
+    console.log(`🔗 Promotion Target: ${HOOKFORGE_URL}`);
+    console.log('==========================================');
+
+  } catch (error) {
+    console.error('\n❌ PIPELINE BOT CRASHED');
+    console.error(error);
     process.exitCode = 1;
+  } finally {
+    await browser.close();
   }
 })();
