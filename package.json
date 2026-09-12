@@ -1,0 +1,10 @@
+{
+  "name": "hookforge-substack-promoter",
+  "version": "1.0.0",
+  "description": "Automated HookForge AI content promotion on Substack using Gemini 3.6 Flash",
+  "main": "publish-bot.js",
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "playwright": "^1.42.1"
+  }
+}
