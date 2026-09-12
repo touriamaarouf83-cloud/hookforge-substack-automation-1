@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const { GoogleGenAI } = require('@google/genai');
 
-const HOOKFORGE_URL = 'https://hook-forge-prime.base44.app/';
+const HOOKFORGE_URL = 'https://base44.app';
 
 (async () => {
   console.log('🧠 Connecting to Gemini 3.6 Flash...');
@@ -33,11 +33,8 @@ const HOOKFORGE_URL = 'https://hook-forge-prime.base44.app/';
   // =========================================================
 
   const prompt = `
-You are an expert content marketing strategist specializing in YouTube
-growth, creator psychology, and AI tools.
-
-Write a completely original, high-quality MARKETING ARTICLE IN ENGLISH
-for YouTubers, NewTubers, micro-creators, and small content creators.
+You are an expert content marketing strategist specializing in YouTube growth, creator psychology, and AI tools.
+Write a completely original, high-quality MARKETING ARTICLE IN ENGLISH for YouTubers, NewTubers, micro-creators, and small content creators.
 
 LANGUAGE REQUIREMENTS:
 - Write the entire article in natural English.
@@ -45,71 +42,23 @@ LANGUAGE REQUIREMENTS:
 - Do NOT mix languages.
 - Do NOT translate the article into Arabic.
 
-TOPIC:
+TOPIC: Why great YouTube videos can fail because of weak titles and weak opening hooks.
+Explain the real problem creators face when they spend hours or days creating a video but fail to attract or retain viewers because the title doesn't create enough curiosity or the opening fails to capture attention.
 
-Why great YouTube videos can fail because of weak titles and weak opening
-hooks.
-
-Explain the real problem creators face when they spend hours or days
-creating a video but fail to attract or retain viewers because the title
-doesn't create enough curiosity or the opening fails to capture attention.
-
-Discuss useful concepts such as:
-
-- Logic Gaps
-- Open Loops
-- Curiosity
-- Negative Stakes
-- Viewer Retention
-- Strong YouTube Hooks
-- Clickable Titles
-
+Discuss useful concepts such as: Logic Gaps, Open Loops, Curiosity, Negative Stakes, Viewer Retention, Strong YouTube Hooks, Clickable Titles.
 Give practical examples and actionable advice.
 
 IMPORTANT:
-- Do NOT fabricate statistics.
-- Do NOT claim guaranteed views.
-- Do NOT claim guaranteed CTR.
-- Do NOT claim guaranteed subscribers.
-- Do NOT promise guaranteed success.
-- Avoid exaggerated fear-based manipulation.
+- Do NOT fabricate statistics, claim guaranteed success, or promise exact CTR/subscribers.
 - Provide genuine value before promoting the product.
 
 Then naturally introduce HookForge AI.
+Explain that HookForge AI helps creators generate: YouTube hooks, YouTube titles, video scripts, content ideas.
 
-Explain that HookForge AI helps creators generate:
-
-- YouTube hooks
-- YouTube titles
-- Video scripts
-- Content ideas
-
-Use this EXACT website URL:
-
-${HOOKFORGE_URL}
-
-IMPORTANT:
-- NEVER use https://base44.app
-- ONLY use ${HOOKFORGE_URL}
-- Include the HookForge URL naturally at least twice.
-
-ARTICLE STRUCTURE:
-
-1. Strong curiosity-driven English title
-2. Engaging introduction
-3. Explanation of the problem
-4. Psychology behind hooks and titles
-5. Practical examples
-6. Actionable advice
-7. Natural HookForge AI introduction
-8. Conclusion
-9. Clear call to action
-
-The article should feel like a professional creator-industry article,
-not a spam advertisement.
+Use this EXACT website URL: ${HOOKFORGE_URL}
+Include the HookForge URL naturally at least twice. Do NOT use any alternate domain names.
 
 Return ONLY valid JSON with exactly these two keys:
-
 {
   "title": "English article title",
   "content": "Full article content in Markdown"
@@ -130,7 +79,7 @@ Return ONLY valid JSON with exactly these two keys:
 
     const responseText = response.text.trim();
 
-    // Remove accidental Markdown JSON wrapper if Gemini adds one
+    // Clean eventual markdown blocks appended by the LLM
     const cleanJson = responseText
       .replace(/^```json\s*/i, '')
       .replace(/\s*```$/i, '')
@@ -148,8 +97,7 @@ Return ONLY valid JSON with exactly these two keys:
     console.log(`✨ Article generated: "${rawTitle}"`);
 
   } catch (error) {
-    console.error('❌ Gemini generation failed:');
-    console.error(error);
+    console.error('❌ Gemini generation failed:', error);
     process.exit(1);
   }
 
@@ -172,176 +120,132 @@ Return ONLY valid JSON with exactly these two keys:
     // =======================================================
 
     let cookiesJson;
-
     try {
       cookiesJson = JSON.parse(process.env.SUBSTACK_COOKIES);
     } catch (error) {
-      throw new Error(
-        'SUBSTACK_COOKIES is not valid JSON.'
-      );
+      throw new Error('SUBSTACK_COOKIES is not valid JSON.');
     }
 
     if (!Array.isArray(cookiesJson)) {
-      throw new Error(
-        'SUBSTACK_COOKIES must be a JSON array.'
-      );
+      throw new Error('SUBSTACK_COOKIES must be a JSON array.');
     }
 
-    // Normalize cookie sameSite values
     const normalizedCookies = cookiesJson.map(cookie => {
-
-      const normalized = {
-        ...cookie
-      };
-
+      const normalized = { ...cookie };
       if (normalized.sameSite) {
-
-        const sameSite = String(
-          normalized.sameSite
-        ).toLowerCase();
-
-        if (sameSite === 'strict') {
-          normalized.sameSite = 'Strict';
-        }
-
-        else if (sameSite === 'lax') {
-          normalized.sameSite = 'Lax';
-        }
-
-        else if (sameSite === 'none') {
-          normalized.sameSite = 'None';
-        }
-
-        else {
-          delete normalized.sameSite;
-        }
+        const sameSite = String(normalized.sameSite).toLowerCase();
+        if (sameSite === 'strict') normalized.sameSite = 'Strict';
+        else if (sameSite === 'lax') normalized.sameSite = 'Lax';
+        else if (sameSite === 'none') normalized.sameSite = 'None';
+        else delete normalized.sameSite;
       }
-
       return normalized;
     });
 
-    console.log(
-      `🍪 Loading ${normalizedCookies.length} Substack cookies...`
-    );
-
+    console.log(`🍪 Loading ${normalizedCookies.length} Substack cookies...`);
     await context.addCookies(normalizedCookies);
 
     // =======================================================
-    // 6. OPEN SUBSTACK
+    // 6. OPEN SUBSTACK DIRECTLY TO CREATOR FLOW
     // =======================================================
 
     const page = await context.newPage();
 
-    console.log('🌐 Opening Substack...');
-
-    // IMPORTANT:
-    // Do NOT use "networkidle".
-    // Substack can keep background requests running indefinitely.
+    console.log('🌐 Directing browser to Substack Publish Studio...');
+    
+    // Crucial Change: Bypass home URL to hit the dashboard creation panel
     await page.goto('https://substack.com', {
       waitUntil: 'domcontentloaded',
       timeout: 60000
     });
 
-    console.log('✅ Substack HTML loaded.');
-
-    // Give the page time to initialize its JavaScript
+    console.log('✅ Substack Workspace loaded.');
     await page.waitForTimeout(5000);
 
     // =======================================================
     // 7. FIND THE EDITOR
     // =======================================================
 
-    console.log('🔎 Looking for Substack editor...');
+    console.log('🔎 Detecting title inputs...');
+    
+    // Dynamic fallback selectors capturing Substack UI updates
+    const titleSelector = 'div[placeholder="Type your title..."], input[placeholder="Type your title..."], .post-title-editor';
+    await page.waitForSelector(titleSelector, {
+      state: 'visible',
+      timeout: 30000
+    });
 
-    await page.waitForSelector(
-      'div[placeholder="Type your title..."]',
-      {
-        state: 'visible',
-        timeout: 30000
-      }
-    );
-
-    console.log('✅ Substack editor detected.');
+    console.log('✅ Editor element is active.');
 
     // =======================================================
     // 8. ENTER TITLE
     // =======================================================
 
-    console.log('📝 Entering article title...');
-
-    await page.fill(
-      'div[placeholder="Type your title..."]',
-      rawTitle
-    );
+    console.log('📝 Injecting dynamic heading...');
+    await page.fill(titleSelector, rawTitle);
 
     // =======================================================
-    // 9. ENTER ARTICLE
+    // 9. ENTER ARTICLE BODY
     // =======================================================
 
-    console.log('✍️ Entering article body...');
+    console.log('✍️ Accessing composition interface...');
+    const bodySelector = 'div[aria-label="Post body"], .prose-editor, div[contenteditable="true"]';
+    await page.waitForSelector(bodySelector, { state: 'visible', timeout: 20000 });
+    await page.focus(bodySelector);
 
-    await page.focus(
-      'div[aria-label="Post body"]'
-    );
+    // Safe execution command avoiding keyboard lag over long articles
+    await page.evaluate(({ selector, body }) => {
+      const editor = document.querySelector(selector);
+      if (editor) {
+        editor.focus();
+        document.execCommand('insertText', false, body);
+      }
+    }, { selector: bodySelector, body: articleBody });
 
-    await page.keyboard.type(articleBody);
+    await page.waitForTimeout(3000);
 
     // =======================================================
     // 10. CONTINUE
     // =======================================================
 
-    console.log('📤 Clicking Continue...');
+    console.log('📤 Submitting post preview...');
+    const continueButton = 'button:has-text("Continue"), button.button.primary';
+    await page.waitForSelector(continueButton, { state: 'visible', timeout: 20000 });
+    await page.click(continueButton);
 
-    await page.click(
-      'button:has-text("Continue")',
-      {
-        timeout: 30000
-      }
-    );
-
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(4000);
 
     // =======================================================
     // 11. FINAL PUBLISH
     // =======================================================
 
-    console.log('🚀 Publishing article...');
-
-    await page.click(
-      'button:has-text("Send to everyone now")',
-      {
-        timeout: 30000
-      }
-    );
+    console.log('🚀 Finalizing publication pipeline...');
+    const publishButton = 'button:has-text("Send to everyone now"), button:has-text("Publish")';
+    await page.waitForSelector(publishButton, { state: 'visible', timeout: 20000 });
+    await page.click(publishButton);
 
     await page.waitForTimeout(5000);
 
     // =======================================================
-    // 12. SUCCESS
+    // 12. SUCCESS LOGS
     // =======================================================
 
     console.log('');
     console.log('==========================================');
-    console.log('🎉 ARTICLE PUBLISHED SUCCESSFULLY');
+    console.log('🎉 ARTICLE PUBLISHED SUCCESSFULLY TO SUBSTACK');
     console.log('==========================================');
     console.log(`📰 Title: ${rawTitle}`);
     console.log(`🔗 HookForge: ${HOOKFORGE_URL}`);
     console.log('==========================================');
 
   } catch (error) {
-
     console.error('');
-    console.error('❌ SUBSTACK AUTOMATION FAILED');
+    console.error('❌ SUBSTACK AUTOMATION ENCOUNTERED AN ERROR');
     console.error('------------------------------------------');
     console.error(error);
     console.error('------------------------------------------');
-
     process.exitCode = 1;
-
   } finally {
-
     await browser.close();
-
   }
-
 })();
