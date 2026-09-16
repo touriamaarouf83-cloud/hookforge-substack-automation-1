@@ -2,57 +2,68 @@ const { chromium } = require('playwright');
 const { GoogleGenAI } = require('@google/genai');
 
 const HOOKFORGE_URL = 'https://hook-forge-prime.base44.app/';
-
 const SUBSTACK_HOME = 'https://substack.com/';
-const SUBSTACK_DASHBOARD = 'https://substack.com/dashboard';
+const SUBSTACK_EDITOR = 'https://substack.com/publish/post';
 
-(async () => {
-  console.log('🧠 Connecting to Gemini 3.6 Flash...');
+function normalizeCookies(raw) {
+  const cookies = JSON.parse(raw);
 
-  // =========================================================
-  // CHECK ENVIRONMENT
-  // =========================================================
+  return cookies.map((cookie) => {
+    const normalized = { ...cookie };
 
+    if (normalized.sameSite) {
+      const value = String(normalized.sameSite).toLowerCase();
+
+      if (value === 'strict') normalized.sameSite = 'Strict';
+      else if (value === 'lax') normalized.sameSite = 'Lax';
+      else if (value === 'none') normalized.sameSite = 'None';
+      else delete normalized.sameSite;
+    }
+
+    if (!normalized.sameSite) {
+      normalized.sameSite = 'Lax';
+    }
+
+    return normalized;
+  });
+}
+
+async function generateArticle() {
   if (!process.env.GEMINI_API_KEY) {
-    console.error('❌ GEMINI_API_KEY is missing.');
-    process.exit(1);
+    throw new Error('GEMINI_API_KEY is missing.');
   }
-
-  if (!process.env.SUBSTACK_COOKIES) {
-    console.error('❌ SUBSTACK_COOKIES is missing.');
-    process.exit(1);
-  }
-
-  // =========================================================
-  // GEMINI
-  // =========================================================
 
   const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY
   });
 
+  console.log('🧠 Connecting to Gemini 3.6 Flash...');
+
   const prompt = `
-You are an expert English content marketing strategist specializing in
-YouTube growth, creator psychology, and AI tools.
+You are an expert YouTube growth and content-marketing writer.
 
-Write a completely original article in ENGLISH for:
+Write ONE original English-language article promoting HookForge AI.
 
-- YouTubers
+PRODUCT:
+HookForge AI helps creators generate:
+- high-click-through-rate YouTube titles
+- strong opening hooks
+- high-retention video scripts
+- better curiosity-driven video concepts
+
+PRODUCT URL:
+${HOOKFORGE_URL}
+
+TARGET AUDIENCE:
+- small YouTubers
 - NewTubers
-- Micro-creators
-- Small content creators
+- micro-creators
+- developers and technical creators
 
-MAIN TOPIC:
+ARTICLE TOPIC:
+Why great YouTube videos can fail because of weak titles and weak opening hooks.
 
-Why great YouTube videos can fail because of weak titles and weak opening
-hooks.
-
-Explain how a creator can spend hours or days producing a video but fail
-to attract or retain viewers because the title does not create enough
-curiosity or the opening does not capture attention.
-
-Discuss useful concepts such as:
-
+Discuss naturally:
 - Logic Gaps
 - Open Loops
 - Curiosity
@@ -61,93 +72,256 @@ Discuss useful concepts such as:
 - Strong YouTube Hooks
 - Clickable Titles
 
-Give practical examples and actionable advice.
+REQUIREMENTS:
+- English ONLY.
+- Do not use Arabic.
+- Do not mix languages.
+- Do not invent statistics.
+- Do not promise guaranteed views, subscribers, or revenue.
+- Give practical and useful advice.
+- Introduce HookForge AI naturally.
+- Include the exact product URL at least twice.
+- Make the article useful even without buying anything.
+- No fake testimonials.
+- No fake case studies.
+- No exaggerated claims.
+- 900 to 1400 words.
+- Use clear headings.
+- Use short paragraphs.
+- Use bullet points where useful.
+- Finish with a natural call to action.
 
-IMPORTANT:
-
-- The entire article MUST be written in natural English.
-- Do NOT use Arabic.
-- Do NOT mix languages.
-- Do NOT fabricate statistics.
-- Do NOT claim guaranteed views.
-- Do NOT claim guaranteed CTR.
-- Do NOT claim guaranteed subscribers.
-- Do NOT promise guaranteed success.
-- Provide genuine value before promoting the product.
-- Make the article feel like a professional creator-industry article,
-  not spam.
-
-Then naturally introduce:
-
-HookForge AI
-
-Explain that HookForge AI helps creators generate:
-
-- YouTube hooks
-- YouTube titles
-- Video scripts
-- Content ideas
-
-Use ONLY this exact website:
-
-${HOOKFORGE_URL}
-
-IMPORTANT:
-
-- Never use https://base44.app
-- Never use any other HookForge URL.
-- Include this exact URL at least twice.
-
-Create a strong curiosity-driven title.
-
-Return ONLY valid JSON:
+Return ONLY valid JSON in exactly this format:
 
 {
-  "title": "English article title",
+  "title": "Article title",
   "content": "Full article content"
 }
 `;
 
-  let title;
-  let content;
+  const response = await ai.models.generateContent({
+    model: 'gemini-3.6-flash',
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json'
+    }
+  });
+
+  let raw = response.text.trim();
+
+  // Remove accidental markdown JSON fences
+  raw = raw
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  let article;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
-      }
-    });
-
-    let text = response.text.trim();
-
-    // Remove accidental markdown JSON fences
-    text = text
-      .replace(/^```json\s*/i, '')
-      .replace(/\s*```$/i, '')
-      .trim();
-
-    const generated = JSON.parse(text);
-
-    if (!generated.title || !generated.content) {
-      throw new Error('Gemini returned incomplete JSON.');
-    }
-
-    title = generated.title;
-    content = generated.content;
-
-    console.log(`✨ Article generated: "${title}"`);
-
+    article = JSON.parse(raw);
   } catch (error) {
-    console.error('❌ Gemini generation failed:');
-    console.error(error);
-    process.exit(1);
+    throw new Error(
+      `Gemini returned invalid JSON.\nResponse:\n${raw.slice(0, 3000)}`
+    );
   }
 
-  // =========================================================
-  // PLAYWRIGHT
-  // =========================================================
+  if (!article.title || !article.content) {
+    throw new Error('Gemini response is missing title or content.');
+  }
+
+  console.log(`✨ Article generated: "${article.title}"`);
+
+  return article;
+}
+
+async function findVisible(locator) {
+  const count = await locator.count();
+
+  for (let i = 0; i < count; i++) {
+    const item = locator.nth(i);
+
+    try {
+      if (await item.isVisible()) {
+        return item;
+      }
+    } catch (_) {
+      // Ignore stale/invisible locator
+    }
+  }
+
+  return null;
+}
+
+async function openEditor(page) {
+  console.log('🌐 Opening Substack...');
+
+  await page.goto(SUBSTACK_HOME, {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000
+  });
+
+  await page.waitForTimeout(2500);
+
+  console.log(`📍 Current URL: ${page.url()}`);
+
+  console.log('✍️ Opening Substack article editor directly...');
+
+  await page.goto(SUBSTACK_EDITOR, {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000
+  });
+
+  await page.waitForTimeout(4000);
+
+  console.log(`📍 Editor URL: ${page.url()}`);
+
+  const currentUrl = page.url().toLowerCase();
+
+  if (
+    currentUrl.includes('/signin') ||
+    currentUrl.includes('/login') ||
+    currentUrl.includes('/signup')
+  ) {
+    throw new Error(
+      `Substack redirected to an authentication page: ${page.url()}`
+    );
+  }
+
+  // Sometimes Substack needs an extra moment to mount the editor.
+  await page.waitForTimeout(3000);
+
+  return page;
+}
+
+async function fillTitle(page, title) {
+  console.log('📝 Detecting title field...');
+
+  const candidates = [
+    page.getByRole('textbox', { name: /title/i }),
+    page.getByPlaceholder(/title/i),
+    page.locator('textarea[placeholder*="title" i]'),
+    page.locator('input[placeholder*="title" i]'),
+    page.locator('textarea'),
+    page.locator('input')
+  ];
+
+  for (const locator of candidates) {
+    const field = await findVisible(locator);
+
+    if (!field) continue;
+
+    try {
+      await field.fill(title);
+      console.log('✅ Title inserted.');
+      return;
+    } catch (_) {
+      // Try next candidate
+    }
+  }
+
+  throw new Error('Could not find the Substack title field.');
+}
+
+async function fillBody(page, content) {
+  console.log('🧾 Detecting article body editor...');
+
+  const candidates = [
+    page.locator('[contenteditable="true"]'),
+    page.locator('[role="textbox"][contenteditable="true"]'),
+    page.locator('div[contenteditable="true"]')
+  ];
+
+  for (const locator of candidates) {
+    const editor = await findVisible(locator);
+
+    if (!editor) continue;
+
+    try {
+      await editor.click();
+      await page.keyboard.insertText(content);
+
+      console.log('✅ Article body inserted.');
+      return;
+    } catch (_) {
+      // Try another editor
+    }
+  }
+
+  throw new Error('Could not find the Substack article body editor.');
+}
+
+async function clickContinue(page) {
+  console.log('➡️ Looking for Continue...');
+
+  const candidates = [
+    page.getByRole('button', { name: /^continue$/i }),
+    page.getByText('Continue', { exact: true }),
+    page.locator('button').filter({ hasText: /^Continue$/i })
+  ];
+
+  for (const locator of candidates) {
+    const button = await findVisible(locator);
+
+    if (!button) continue;
+
+    try {
+      await button.click();
+      console.log('✅ Continue clicked.');
+      await page.waitForTimeout(3000);
+      return;
+    } catch (_) {
+      // Try next candidate
+    }
+  }
+
+  throw new Error('Could not find the Continue button.');
+}
+
+async function publishArticle(page) {
+  console.log('🚀 Looking for Publish button...');
+
+  const candidates = [
+    page.getByRole('button', { name: /publish/i }),
+    page.getByText(/^Publish$/i, { exact: true }),
+    page.getByText(/Send to everyone now/i),
+    page.getByText(/Publish now/i),
+    page.locator('button').filter({ hasText: /publish/i })
+  ];
+
+  for (const locator of candidates) {
+    const button = await findVisible(locator);
+
+    if (!button) continue;
+
+    try {
+      await button.click();
+
+      console.log('✅ Publish action clicked.');
+
+      await page.waitForTimeout(5000);
+
+      return;
+    } catch (_) {
+      // Try next candidate
+    }
+  }
+
+  throw new Error(
+    'Could not find the final Publish button. The article may be saved as a draft.'
+  );
+}
+
+async function main() {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('Missing GEMINI_API_KEY secret.');
+  }
+
+  if (!process.env.SUBSTACK_COOKIES) {
+    throw new Error('Missing SUBSTACK_COOKIES secret.');
+  }
+
+  const article = await generateArticle();
 
   console.log('🤖 Launching browser...');
 
@@ -155,370 +329,82 @@ Return ONLY valid JSON:
     headless: true
   });
 
-  const context = await browser.newContext();
-
-  // =========================================================
-  // LOAD SUBSTACK COOKIES
-  // =========================================================
+  const context = await browser.newContext({
+    viewport: {
+      width: 1440,
+      height: 1000
+    },
+    userAgent:
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ' +
+      '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+  });
 
   try {
-    let cookies;
-
-    try {
-      cookies = JSON.parse(process.env.SUBSTACK_COOKIES);
-    } catch {
-      throw new Error(
-        'SUBSTACK_COOKIES is not valid JSON.'
-      );
-    }
-
-    if (!Array.isArray(cookies)) {
-      throw new Error(
-        'SUBSTACK_COOKIES must be a JSON array.'
-      );
-    }
-
-    // Normalize cookie sameSite values
-    cookies = cookies.map(cookie => {
-      const normalized = { ...cookie };
-
-      if (normalized.sameSite) {
-        const value = String(
-          normalized.sameSite
-        ).toLowerCase();
-
-        if (value === 'strict') {
-          normalized.sameSite = 'Strict';
-        } else if (value === 'lax') {
-          normalized.sameSite = 'Lax';
-        } else if (value === 'none') {
-          normalized.sameSite = 'None';
-        } else {
-          delete normalized.sameSite;
-        }
-      }
-
-      return normalized;
-    });
+    const cookies = normalizeCookies(process.env.SUBSTACK_COOKIES);
 
     console.log(`🍪 Loading ${cookies.length} cookies...`);
 
     await context.addCookies(cookies);
 
-    // =======================================================
-    // OPEN SUBSTACK
-    // =======================================================
-
     const page = await context.newPage();
 
     page.setDefaultTimeout(30000);
 
-    console.log('🌐 Opening Substack...');
+    await openEditor(page);
 
-    await page.goto(SUBSTACK_HOME, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000
-    });
+    console.log('✅ Substack editor opened.');
 
-    await page.waitForTimeout(4000);
+    await fillTitle(page, article.title);
 
-    console.log(`📍 Current URL: ${page.url()}`);
-
-    // =======================================================
-    // OPEN PUBLISHER DASHBOARD
-    // =======================================================
-
-    console.log('🏠 Opening Publisher Dashboard...');
-
-    await page.goto(SUBSTACK_DASHBOARD, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000
-    });
-
-    await page.waitForTimeout(5000);
-
-    console.log(`📍 Dashboard URL: ${page.url()}`);
-
-    // =======================================================
-    // CHECK LOGIN
-    // =======================================================
-
-    const currentUrl = page.url();
-
-    if (
-      currentUrl.includes('/signin') ||
-      currentUrl.includes('/login') ||
-      currentUrl.includes('/signup')
-    ) {
-      throw new Error(
-        'Substack session is not authenticated. SUBSTACK_COOKIES has expired or is invalid.'
-      );
-    }
-
-    console.log('✅ Substack session appears authenticated.');
-
-    // =======================================================
-    // FIND CREATE BUTTON
-    // =======================================================
-
-    console.log('🔎 Looking for Create button...');
-
-    const createButton = page.getByRole('button', {
-      name: /^Create$/i
-    }).first();
-
-    if (await createButton.isVisible().catch(() => false)) {
-      await createButton.click();
-    } else {
-      const createText = page.getByText('Create', {
-        exact: true
-      }).first();
-
-      if (await createText.isVisible().catch(() => false)) {
-        await createText.click();
-      } else {
-        throw new Error(
-          'Could not find the Create button on the Publisher Dashboard.'
-        );
-      }
-    }
+    await fillBody(page, article.content);
 
     await page.waitForTimeout(1500);
 
-    // =======================================================
-    // SELECT ARTICLE
-    // =======================================================
+    await clickContinue(page);
 
-    console.log('📰 Selecting Article...');
-
-    const articleOption = page.getByText('Article', {
-      exact: true
-    }).first();
-
-    if (
-      await articleOption.isVisible().catch(() => false)
-    ) {
-      await articleOption.click();
-    } else {
-      const articleButton = page.getByRole('button', {
-        name: /Article/i
-      }).first();
-
-      if (
-        await articleButton.isVisible().catch(() => false)
-      ) {
-        await articleButton.click();
-      } else {
-        throw new Error(
-          'Could not find the Article option.'
-        );
-      }
-    }
-
-    // =======================================================
-    // WAIT FOR EDITOR
-    // =======================================================
-
-    console.log('⏳ Waiting for Substack editor...');
-
-    await page.waitForTimeout(4000);
-
-    // =======================================================
-    // FIND TITLE FIELD
-    // =======================================================
-
-    console.log('🔎 Detecting title field...');
-
-    const titleCandidates = [
-      page.getByPlaceholder(/title/i).first(),
-      page.locator('input[placeholder*="title" i]').first(),
-      page.locator('textarea[placeholder*="title" i]').first(),
-      page.locator('[contenteditable="true"]').first()
-    ];
-
-    let titleField = null;
-
-    for (const candidate of titleCandidates) {
-      if (
-        await candidate.isVisible().catch(() => false)
-      ) {
-        titleField = candidate;
-        break;
-      }
-    }
-
-    if (!titleField) {
-      throw new Error(
-        'Could not find the Substack title field.'
-      );
-    }
-
-    console.log('✅ Title field detected.');
-
-    await titleField.fill(title);
-
-    // =======================================================
-    // FIND BODY EDITOR
-    // =======================================================
-
-    console.log('🔎 Detecting body editor...');
-
-    const editableElements = page.locator(
-      '[contenteditable="true"]'
-    );
-
-    const editableCount = await editableElements.count();
-
-    console.log(
-      `🧩 Found ${editableCount} editable element(s).`
-    );
-
-    let bodyEditor = null;
-
-    for (let i = 0; i < editableCount; i++) {
-      const candidate = editableElements.nth(i);
-
-      if (
-        await candidate.isVisible().catch(() => false)
-      ) {
-        bodyEditor = candidate;
-      }
-    }
-
-    if (!bodyEditor) {
-      throw new Error(
-        'Could not find the Substack body editor.'
-      );
-    }
-
-    console.log('✅ Body editor detected.');
-
-    // =======================================================
-    // ENTER ARTICLE
-    // =======================================================
-
-    console.log('✍️ Writing article...');
-
-    await bodyEditor.click();
-
-    await page.keyboard.insertText(content);
-
-    await page.waitForTimeout(2000);
-
-    console.log('✅ Article content entered.');
-
-    // =======================================================
-    // CONTINUE
-    // =======================================================
-
-    console.log('📤 Looking for Continue button...');
-
-    const continueButton = page.getByRole('button', {
-      name: /^Continue$/i
-    }).first();
-
-    await continueButton.waitFor({
-      state: 'visible',
-      timeout: 30000
-    });
-
-    await continueButton.click();
-
-    console.log('✅ Continue clicked.');
-
-    await page.waitForTimeout(4000);
-
-    // =======================================================
-    // FINAL PUBLISH
-    // =======================================================
-
-    console.log('🚀 Looking for final publish button...');
-
-    const publishCandidates = [
-      page.getByRole('button', {
-        name: /Send to everyone now/i
-      }).first(),
-
-      page.getByRole('button', {
-        name: /^Publish$/i
-      }).first(),
-
-      page.getByRole('button', {
-        name: /Publish now/i
-      }).first()
-    ];
-
-    let published = false;
-
-    for (const button of publishCandidates) {
-
-      if (
-        await button.isVisible().catch(() => false)
-      ) {
-
-        console.log(
-          `📌 Found final button: ${await button.innerText().catch(() => 'Publish')}`
-        );
-
-        await button.click();
-
-        published = true;
-
-        break;
-      }
-    }
-
-    if (!published) {
-      throw new Error(
-        'Could not find the final Publish button.'
-      );
-    }
-
-    await page.waitForTimeout(5000);
+    await publishArticle(page);
 
     console.log('');
-    console.log('========================================');
     console.log('🎉 ARTICLE PUBLISHED SUCCESSFULLY');
-    console.log('========================================');
-    console.log(`📰 Title: ${title}`);
     console.log(`🔗 HookForge: ${HOOKFORGE_URL}`);
-    console.log('========================================');
-
+    console.log(`📰 Title: ${article.title}`);
+    console.log('');
   } catch (error) {
-
     console.error('');
     console.error('❌ AUTOMATION FAILED');
     console.error('----------------------------------------');
     console.error(error);
     console.error('----------------------------------------');
 
-    // Save screenshot for debugging
     try {
-      const screenshotPage = context.pages()[0];
+      const page = context.pages()[0];
 
-      if (screenshotPage) {
-        await screenshotPage.screenshot({
+      if (page) {
+        await page.screenshot({
           path: 'substack-error.png',
           fullPage: true
         });
 
-        console.log(
-          '📸 Error screenshot saved as substack-error.png'
-        );
+        console.log('📸 Error screenshot saved as substack-error.png');
+
+        console.log(`📍 Failure URL: ${page.url()}`);
+        console.log(`📄 Page title: ${await page.title()}`);
       }
     } catch (screenshotError) {
       console.error(
-        '⚠️ Could not save screenshot:',
+        'Could not save diagnostic screenshot:',
         screenshotError.message
       );
     }
 
     process.exitCode = 1;
-
   } finally {
-
     await browser.close();
-
   }
+}
 
-})();
+main().catch((error) => {
+  console.error('❌ FATAL ERROR');
+  console.error(error);
+  process.exitCode = 1;
+});
