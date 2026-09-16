@@ -1,15 +1,17 @@
-name: HookForge AI Autonomous Promoter (Every 4 Hours)
+name: HookForge AI Autonomous Promoter
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: '0 */4 * * *'
 
 jobs:
   marketing-deployment:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -21,17 +23,9 @@ jobs:
         run: |
           npm install
           npx playwright install --with-deps chromium
-          
+
       - name: Generate and Publish
         env:
-          SUBSTACK_SID: ${{ secrets.SUBSTACK_SID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SUBSTACK_COOKIES: ${{ secrets.SUBSTACK_COOKIES }}
         run: node publish-bot.js
-
-      # 📸 رفع لقطة الشاشة تلقائياً إذا فشل الروبوت
-      - name: Upload Error Screenshot if Failed
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: substack-error-screen
-          path: error-screenshot.png
