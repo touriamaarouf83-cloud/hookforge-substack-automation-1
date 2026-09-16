@@ -18,6 +18,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: Install Dependencies
         run: |
@@ -29,3 +30,11 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SUBSTACK_COOKIES: ${{ secrets.SUBSTACK_COOKIES }}
         run: node publish-bot.js
+
+      - name: Upload Debug Screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: substack-debug
+          path: substack-error.png
+          if-no-files-found: ignore
