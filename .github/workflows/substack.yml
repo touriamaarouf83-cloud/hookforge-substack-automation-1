@@ -1,40 +1,45 @@
-name: HookForge AI Autonomous Promoter
+name: marketing-deployment
 
 on:
   workflow_dispatch:
-
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: "0 10 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hookforge-substack-promotion
+  cancel-in-progress: false
 
 jobs:
-  marketing-deployment:
+  publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: '24'
-          package-manager-cache: false
+          node-version: "22"
+          cache: "npm"
 
-      - name: Install Dependencies
-        run: |
-          npm install
-          npx playwright install --with-deps chromium
+      - name: Install dependencies
+        run: npm install
 
-      - name: Generate and Publish
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Validate JavaScript syntax
+        run: node --check publish-bot.js
+
+      - name: Run HookForge Substack automation
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SUBSTACK_COOKIES: ${{ secrets.SUBSTACK_COOKIES }}
+          GEMINI_MODEL: gemini-3.8-flash
+          PUBLISH_LIVE: "false"
         run: node publish-bot.js
-
-      - name: Upload Debug Screenshot
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: substack-debug
-          path: substack-error.png
-          if-no-files-found: ignore
