@@ -1,23 +1,74 @@
+
 'use strict';
 
 const { chromium } = require('playwright');
 const { GoogleGenAI } = require('@google/genai');
 
 const HOOKFORGE_URL = 'https://hook-forge-prime.base44.app/';
-const SUBSTACK_HOME = 'https://substack.com/';
-const SUBSTACK_EDITOR = 'https://substack.com/publish/post';
-
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const MAX_ATTEMPTS = 5;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function getErrorStatus(error) {
-  const status = Number(error?.status || error?.code);
-  if (Number.isFinite(status) && status > 0) return status;
+function normalizeCookies(raw) {
+  let parsed;
 
-  const message = String(error?.message || '');
-  const match = message.match(/\b(429|500|502|503|504)\b/);
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('SUBSTACK_COOKIES must be valid JSON.');
+  }
+
+  const cookies = Array.isArray(parsed) ? parsed : parsed?.cookies;
+
+  if (!Array.isArray(cookies) || cookies.length === 0) {
+    throw new Error(
+      'No cookies found. Use a valid Playwright-compatible cookie export.'
+    );
+  }
+
+  return cookies.map((cookie) => {
+    const item = {
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path || '/',
+      secure: Boolean(cookie.secure),
+      httpOnly: Boolean(cookie.httpOnly)
+    };
+
+    if (!item.name || item.value === undefined || !item.domain) {
+      throw new Error('A cookie is missing its name, value, or domain.');
+    }
+
+    const expiry = Number(cookie.expires ?? cookie.expirationDate);
+    if (Number.isFinite(expiry) && expiry > 0) {
+      item.expires = expiry;
+    }
+
+    const sameSite = String(cookie.sameSite || '').toLowerCase();
+
+    if (sameSite === 'strict') item.sameSite = 'Strict';
+    else if (sameSite === 'lax') item.sameSite = 'Lax';
+    else if (
+      sameSite === 'none' ||
+      sameSite === 'no_restriction'
+    ) {
+      item.sameSite = 'None';
+    }
+
+    return item;
+  });
+}
+
+function getStatus(error) {
+  const status = Number(error?.status || error?.code);
+  if (Number.isFinite(status)) return status;
+
+  const match = String(error?.message || '').match(
+    /\b(408|429|500|502|503|504)\b/
+  );
+
   return match ? Number(match[1]) : 0;
 }
 
@@ -26,7 +77,9 @@ async function generateWithRetry(ai, prompt) {
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      console.log(`Gemini request ${attempt}/${MAX_ATTEMPTS} (${GEMINI_MODEL})`);
+      console.log(
+        `Gemini request ${attempt}/${MAX_ATTEMPTS}: ${GEMINI_MODEL}`
+      );
 
       return await ai.models.generateContent({
         model: GEMINI_MODEL,
@@ -39,26 +92,28 @@ async function generateWithRetry(ai, prompt) {
       });
     } catch (error) {
       lastError = error;
-      const status = getErrorStatus(error);
+
+      const status = getStatus(error);
       const retryable = [408, 429, 500, 502, 503, 504].includes(status);
 
-      console.error(`Gemini error (status ${status || 'unknown'}):`,
-        error?.message || error);
+      console.error(
+        `Gemini request failed (${status || 'unknown'}):`,
+        error.message
+      );
 
-      if (!retryable || attempt === MAX_ATTEMPTS) {
-        break;
-      }
+      if (!retryable || attempt === MAX_ATTEMPTS) break;
 
       const delay = Math.min(30000, 2000 * (2 ** (attempt - 1)));
+
       console.log(`Retrying in ${Math.ceil(delay / 1000)} seconds...`);
       await sleep(delay);
     }
   }
 
-  throw lastError || new Error('Gemini generation failed without an error message.');
+  throw lastError || new Error('Gemini generation failed.');
 }
 
-function parseArticleResponse(response) {
+function parseArticle(response) {
   let raw = response?.text;
 
   if (typeof raw !== 'string' || !raw.trim()) {
@@ -67,34 +122,34 @@ function parseArticleResponse(response) {
 
   raw = raw.trim();
 
-  // Remove optional Markdown fences without a regex containing backticks.
+  // Remove optional Markdown code fences.
   const lines = raw.split(/\r?\n/);
-  if (lines.length && /^```(?:json)?\s*$/i.test(lines[0].trim())) {
+
+  if (lines[0] && /^```(?:json)?\s*$/i.test(lines[0].trim())) {
     lines.shift();
+
     if (lines.length && lines[lines.length - 1].trim() === '```') {
       lines.pop();
     }
+
     raw = lines.join('\n').trim();
   }
 
   let article;
+
   try {
     article = JSON.parse(raw);
   } catch (error) {
-    throw new Error(
-      `Gemini returned invalid JSON: ${error.message}\n` +
-      `Response preview:\n${raw.slice(0, 1500)}`
-    );
+    throw new Error(`Gemini returned invalid JSON: ${error.message}`);
   }
 
   if (
-    !article ||
     typeof article.title !== 'string' ||
     typeof article.content !== 'string' ||
     !article.title.trim() ||
     !article.content.trim()
   ) {
-    throw new Error('Gemini response must contain non-empty title and content strings.');
+    throw new Error('The generated article must contain title and content.');
   }
 
   article.title = article.title.trim();
@@ -108,20 +163,22 @@ function parseArticleResponse(response) {
 }
 
 async function generateArticle() {
-  if (!process.env.GEMINI_API_KEY) {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
     throw new Error('Missing GEMINI_API_KEY GitHub Actions secret.');
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
 
   const prompt = `
-You are an experienced content-marketing writer for small YouTube creators.
+You are an experienced content-marketing writer for YouTube creators.
 
-Write one useful, original English-language article that introduces HookForge AI
-naturally while helping creators improve their YouTube titles and opening hooks.
+Create one original, helpful English-language article about improving
+YouTube video titles and opening hooks.
 
-PRODUCT URL:
-${HOOKFORGE_URL}
+PRODUCT: HookForge AI
+URL: ${HOOKFORGE_URL}
 
 AUDIENCE:
 - Small YouTubers and NewTubers
@@ -129,93 +186,40 @@ AUDIENCE:
 - Developers and technical creators
 
 TOPIC:
-Why good videos can underperform when their titles and opening hooks are weak.
+Why good videos may underperform because of weak titles and opening hooks.
 
-Discuss naturally:
+Discuss:
 - Curiosity and open loops
 - Logic gaps
-- Negative stakes, used honestly and without fearmongering
+- Negative stakes used honestly
 - Viewer retention
 - Strong opening hooks
-- Clear, clickable titles
+- Clear, compelling titles
 
-REQUIREMENTS:
-- English only.
-- Write 900–1,200 words.
+RULES:
+- Write 900–1200 words.
 - Use a compelling, accurate title.
-- Use clear headings, short paragraphs, and useful bullet points.
-- Give practical advice that readers can apply.
+- Use clear headings and short paragraphs.
+- Give practical advice.
 - Include the exact product URL at least twice.
-- Do not invent statistics, testimonials, case studies, or research.
+- Do not invent statistics, testimonials, or research.
 - Do not promise guaranteed views, subscribers, or revenue.
-- Do not keyword-stuff or repeat the product name unnaturally.
-- Return ONLY valid JSON in this exact shape:
+- Do not keyword-stuff.
+- Make the article useful even without using the product.
+- Return ONLY valid JSON in this exact structure:
 {
   "title": "Article title",
-  "content": "Full article content with headings and paragraphs"
+  "content": "Full article content"
 }
 `;
 
   const response = await generateWithRetry(ai, prompt);
-  const article = parseArticleResponse(response);
+  const article = parseArticle(response);
 
   console.log(`Article generated: ${article.title}`);
   console.log(`Article length: ${article.content.length} characters`);
 
   return article;
-}
-
-function normalizeCookies(raw) {
-  let parsed;
-
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error('SUBSTACK_COOKIES is not valid JSON.');
-  }
-
-  // Accept either a cookie array or Playwright storageState JSON.
-  const cookies = Array.isArray(parsed) ? parsed : parsed?.cookies;
-
-  if (!Array.isArray(cookies) || cookies.length === 0) {
-    throw new Error(
-      'SUBSTACK_COOKIES must contain a non-empty cookie array. ' +
-      'Use Playwright-compatible cookies for your own Substack account.'
-    );
-  }
-
-  return cookies.map((cookie) => {
-    const normalized = {
-      name: cookie.name,
-      value: cookie.value,
-      domain: cookie.domain,
-      path: cookie.path || '/',
-      secure: Boolean(cookie.secure),
-      httpOnly: Boolean(cookie.httpOnly)
-    };
-
-    if (!normalized.name || normalized.value === undefined || !normalized.domain) {
-      throw new Error('A Substack cookie is missing name, value, or domain.');
-    }
-
-    if (cookie.expires !== undefined && Number(cookie.expires) > 0) {
-      normalized.expires = Number(cookie.expires);
-    } else if (
-      cookie.expirationDate !== undefined &&
-      Number(cookie.expirationDate) > 0
-    ) {
-      normalized.expires = Number(cookie.expirationDate);
-    }
-
-    const sameSite = String(cookie.sameSite || '').toLowerCase();
-    if (sameSite === 'strict') normalized.sameSite = 'Strict';
-    else if (sameSite === 'lax') normalized.sameSite = 'Lax';
-    else if (sameSite === 'none' || sameSite === 'no_restriction') {
-      normalized.sameSite = 'None';
-    }
-
-    return normalized;
-  });
 }
 
 async function findVisible(locator) {
@@ -227,7 +231,7 @@ async function findVisible(locator) {
     try {
       if (await item.isVisible()) return item;
     } catch {
-      // The element may have disappeared while Substack was rendering.
+      // Continue to the next matching element.
     }
   }
 
@@ -235,165 +239,192 @@ async function findVisible(locator) {
 }
 
 async function openEditor(page) {
-  console.log('Opening Substack...');
-  await page.goto(SUBSTACK_HOME, {
+  const publication = String(
+    process.env.SUBSTACK_PUBLICATION || ''
+  ).trim().toLowerCase();
+
+  if (!/^[a-z0-9-]+$/.test(publication)) {
+    throw new Error(
+      'Set SUBSTACK_PUBLICATION to your publication subdomain, ' +
+      'without https:// or .substack.com.'
+    );
+  }
+
+  const editorUrl =
+    `https://${publication}.substack.com/publish/post?type=newsletter`;
+
+  console.log(`Opening publication editor: ${editorUrl}`);
+
+  await page.goto(editorUrl, {
     waitUntil: 'domcontentloaded',
     timeout: 60000
   });
 
-  await sleep(2000);
-  await page.goto(SUBSTACK_EDITOR, {
-    waitUntil: 'domcontentloaded',
-    timeout: 60000
-  });
+  await sleep(7000);
 
-  await sleep(4000);
+  console.log(`Current page: ${page.url()}`);
 
   const url = page.url().toLowerCase();
 
   if (
+    url.includes('/sign-in') ||
     url.includes('/signin') ||
     url.includes('/login') ||
     url.includes('/signup')
   ) {
     throw new Error(
-      'Substack redirected to login. SUBSTACK_COOKIES may be expired or invalid.'
+      'Substack redirected to login. Check whether SUBSTACK_COOKIES ' +
+      'are current and belong to the correct account.'
     );
   }
 
   if (!url.includes('substack.com')) {
     throw new Error(`Unexpected editor URL: ${page.url()}`);
   }
-
-  return page;
 }
 
 async function fillTitle(page, title) {
-  console.log('Finding the title field...');
+  console.log('Looking for the article title field...');
 
-  const candidates = [
-    page.getByRole('textbox', { name: /title/i }),
-    page.getByPlaceholder(/title/i),
-    page.locator('textarea[placeholder*="title" i]'),
-    page.locator('input[placeholder*="title" i]')
+  const selectors = [
+    'textarea[aria-label="title"]',
+    'textarea[placeholder="Title"]',
+    'textarea[placeholder*="title" i]',
+    '[data-testid="post-title"]',
+    'input[placeholder="Title"]',
+    'input[placeholder*="title" i]',
+    '[role="textbox"][aria-label="title"]'
   ];
 
-  for (const locator of candidates) {
-    const field = await findVisible(locator);
+  for (const selector of selectors) {
+    const field = await findVisible(page.locator(selector));
+
     if (!field) continue;
 
     try {
-      await field.fill(title);
-      console.log('Title inserted.');
-      return;
-    } catch {
-      // Try the next matching field.
+      if (!(await field.isEditable())) continue;
+
+      await field.fill(title, { timeout: 10000 });
+
+      const tag = await field.evaluate((element) =>
+        element.tagName.toLowerCase()
+      );
+
+      const value = tag === 'textarea' || tag === 'input'
+        ? await field.inputValue()
+        : await field.textContent();
+
+      if (String(value || '').trim() === title.trim()) {
+        console.log(`Title entered successfully (${selector}).`);
+        return;
+      }
+    } catch (error) {
+      console.log(`Title selector failed: ${selector}`);
     }
   }
 
+  await printEditorDiagnostics(page);
+
   throw new Error(
-    'Could not identify the title field. Substack may have changed its editor.'
+    'Title field not found. Review the editor diagnostics above.'
   );
 }
 
 async function fillBody(page, content) {
-  console.log('Finding the article editor...');
+  console.log('Looking for the article body editor...');
 
-  const candidates = [
-    page.locator('[contenteditable="true"][role="textbox"]'),
-    page.locator('[contenteditable="true"]')
+  const selectors = [
+    '.tiptap.ProseMirror[contenteditable="true"]',
+    '.ProseMirror[contenteditable="true"]',
+    '[contenteditable="true"][role="textbox"]',
+    '[contenteditable="true"]'
   ];
 
-  for (const locator of candidates) {
-    const editor = await findVisible(locator);
+  for (const selector of selectors) {
+    const editor = await findVisible(page.locator(selector));
+
     if (!editor) continue;
 
     try {
       await editor.click();
       await page.keyboard.insertText(content);
-      console.log('Article body inserted.');
+
+      console.log(`Article body entered (${selector}).`);
       return;
-    } catch {
-      // Try another matching editor.
+    } catch (error) {
+      console.log(`Body selector failed: ${selector}`);
     }
   }
 
+  await printEditorDiagnostics(page);
+
   throw new Error(
-    'Could not identify the article editor. Substack may have changed its layout.'
+    'Article body editor not found. Review the editor diagnostics above.'
   );
 }
 
-async function clickContinue(page) {
-  console.log('Looking for Continue...');
+async function printEditorDiagnostics(page) {
+  try {
+    const fields = await page.locator(
+      'textarea, input, [contenteditable="true"], button'
+    ).evaluateAll((elements) =>
+      elements.slice(0, 80).map((element) => ({
+        tag: element.tagName,
+        text: (element.innerText || '').slice(0, 80),
+        ariaLabel: element.getAttribute('aria-label'),
+        placeholder: element.getAttribute('placeholder'),
+        testId: element.getAttribute('data-testid'),
+        contentEditable: element.getAttribute('contenteditable'),
+        visible: Boolean(element.getClientRects().length)
+      }))
+    );
 
-  const candidates = [
-    page.getByRole('button', { name: /^continue$/i }),
-    page.locator('button').filter({ hasText: /^Continue$/i })
-  ];
+    console.error(
+      'EDITOR DIAGNOSTICS:',
+      JSON.stringify(fields, null, 2)
+    );
 
-  for (const locator of candidates) {
-    const button = await findVisible(locator);
-    if (!button) continue;
+    console.error('Page title:', await page.title());
+    console.error('Page URL:', page.url());
 
-    try {
-      await button.click();
-      await sleep(2500);
-      console.log('Continue clicked.');
-      return;
-    } catch {
-      // Try another candidate.
-    }
+    await page.screenshot({
+      path: 'substack-error.png',
+      fullPage: true
+    });
+
+    console.error('Screenshot saved as substack-error.png');
+  } catch (error) {
+    console.error('Could not collect editor diagnostics:', error.message);
   }
-
-  throw new Error(
-    'Continue was not found. The article may still be in the editor.'
-  );
 }
 
-async function publishArticle(page) {
-  console.log('Looking for the final Publish button...');
+async function waitForDraftSave(page) {
+  // Substack saves drafts automatically; allow time for autosave.
+  console.log('Waiting for the draft to autosave...');
+  await sleep(5000);
 
-  const candidates = [
-    page.getByRole('button', { name: /^publish$/i }),
-    page.getByRole('button', { name: /publish now/i }),
-    page.getByRole('button', { name: /send now/i })
-  ];
-
-  for (const locator of candidates) {
-    const button = await findVisible(locator);
-    if (!button) continue;
-
-    try {
-      // This can publish/send the post to your Substack audience.
-      await button.click();
-      await sleep(4000);
-
-      console.log('Publish button clicked. Verify the post in Substack.');
-      return;
-    } catch {
-      // Try another candidate.
-    }
-  }
-
-  throw new Error(
-    'Final Publish button not found. Check the editor manually; ' +
-    'the post may be saved as a draft.'
+  const saved = await findVisible(
+    page.getByRole('button', { name: /^saved$/i })
   );
+
+  if (saved) {
+    console.log('Substack shows the draft as saved.');
+  } else {
+    console.log(
+      'No explicit Saved indicator found. Check the draft in Substack.'
+    );
+  }
 }
 
 async function main() {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error('Missing GEMINI_API_KEY secret.');
-  }
-
   if (!process.env.SUBSTACK_COOKIES) {
-    throw new Error('Missing SUBSTACK_COOKIES secret.');
+    throw new Error('Missing SUBSTACK_COOKIES GitHub Actions secret.');
   }
 
-  // Generate and validate the article before opening the publishing editor.
   const article = await generateArticle();
 
   console.log('Launching Chromium...');
+
   const browser = await chromium.launch({ headless: true });
 
   const context = await browser.newContext({
@@ -402,6 +433,7 @@ async function main() {
 
   try {
     const cookies = normalizeCookies(process.env.SUBSTACK_COOKIES);
+
     await context.addCookies(cookies);
 
     const page = await context.newPage();
@@ -410,38 +442,23 @@ async function main() {
     await openEditor(page);
     await fillTitle(page, article.title);
     await fillBody(page, article.content);
+    await waitForDraftSave(page);
 
-    // Stop before publication if you prefer to review each draft manually.
+    console.log('');
+    console.log('DRAFT CONTENT ENTERED');
+    console.log(`Title: ${article.title}`);
+
     if (process.env.PUBLISH_LIVE !== 'true') {
-      console.log('Draft filled. PUBLISH_LIVE is not true, so not publishing.');
-      console.log('Review the draft, then set PUBLISH_LIVE=true to enable publishing.');
+      console.log('PUBLISH_LIVE is not true; leaving the article as a draft.');
       return;
     }
 
-    await clickContinue(page);
-    await publishArticle(page);
-
-    console.log('Publishing action completed; verify the post in Substack.');
-    console.log(`Title: ${article.title}`);
-    console.log(`HookForge URL: ${HOOKFORGE_URL}`);
+    console.log(
+      'PUBLISH_LIVE=true, but this script intentionally does not ' +
+      'click the final publishing controls. Review the draft in Substack.'
+    );
   } catch (error) {
-    console.error('\nAUTOMATION FAILED');
-    console.error(error?.stack || error);
-
-    try {
-      const page = context.pages()[0];
-      if (page) {
-        await page.screenshot({
-          path: 'substack-error.png',
-          fullPage: true
-        });
-        console.error(`Failure URL: ${page.url()}`);
-        console.error('Diagnostic screenshot saved as substack-error.png');
-      }
-    } catch (screenshotError) {
-      console.error('Could not save screenshot:', screenshotError.message);
-    }
-
+    console.error('AUTOMATION FAILED:', error.stack || error);
     throw error;
   } finally {
     await browser.close();
@@ -449,6 +466,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('FATAL:', error?.message || error);
+  console.error('FATAL:', error.message || error);
   process.exitCode = 1;
 });
