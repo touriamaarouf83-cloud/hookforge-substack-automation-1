@@ -93,13 +93,7 @@ REQUIREMENTS:
 
 Return ONLY valid JSON in exactly this format:
 
-{
-  "title": "Article title",
-  "content": "Full article content"
-}
-`;
-
-  const response = await ai.models.generateContent({
+  const response = await generateWithRetry(ai, prompt);
     model: 'gemini-3.6-flash',
     contents: prompt,
     config: {
